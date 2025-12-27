@@ -5,9 +5,10 @@ Author: anysong
 Copyright: Copyright © 2025 anysong. All rights reserved.
 License: CC BY-NC-ND 4.0 (Attribution-NonCommercial-NoDerivs)
 
-Disclaimer: 
-This software is provided "as is", without warranty of any kind. 
-The user assumes all responsibility for any modifications made to game files.
+[Disclaimer]
+1. 본 프로그램은 에셋 추출 도구(UABEA, dnSpy 등)와 연동하여 사용하는 '중개 보조 도구'입니다.
+2. 프로그램 사용으로 인한 게임 계정 제재, 데이터 손상 등의 책임은 전적으로 사용자에게 있습니다.
+3. 상업적 이용을 금하며, 반드시 원본 파일의 백업 후 사용을 권장합니다.
 """
 
 import customtkinter as ctk
@@ -33,7 +34,7 @@ CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
 DEFAULT_PROMPT = (
     "You are a professional game translator.\n"
     "Output must be a JSON array of objects. Format: [{\"id\": 1, \"trans\": \"Korean text\"}, ...]\n"
-    "Do NOT translate tokens like __MASK_XXX__.\n"
+    "Do NOT translate tokens like __MASK_XXXX__.\n"
     "Translate the 'text' field into natural Korean 'trans'."
 )
 
@@ -44,7 +45,7 @@ class TranslatorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(WINDOW_TITLE)
-        self.geometry("1100x800")
+        self.geometry("900x800")
         
         # [레이아웃 그리드 설정]
         # column 0: 사이드바 (고정 폭)
@@ -75,6 +76,7 @@ class TranslatorApp(ctk.CTk):
         self.path_glossary = tk.StringVar()
         self.path_util_db = tk.StringVar()
         self.path_ai_input = tk.StringVar()
+        self.path_mask_target = tk.StringVar()
         
         self.opt_group_brackets = tk.BooleanVar(value=True)
         self.opt_extract_masking = tk.BooleanVar(value=False)
@@ -147,8 +149,8 @@ class TranslatorApp(ctk.CTk):
     # [UI Part 2] 메인 컨테이너 및 페이지 전환 로직
     # ================================================================
     def setup_main_container(self):
-        # [FIX 2] 눈뽕 방지: 라이트 모드 배경을 'transparent'(흰색) 대신 부드러운 회색('gray94')으로 설정
-        bg_color = ("gray94", "gray17")
+        # [FIX 2] 눈뽕 방지: 라이트 모드 배경을 'transparent'(흰색) 대신 부드러운 회색('gray90')으로 설정
+        bg_color = ("gray90", "gray17")
         
         # 오른쪽 영역 (콘텐츠가 들어갈 자리)
         # row=0: 메인 페이지들, row=1: 로그 패널
@@ -172,7 +174,7 @@ class TranslatorApp(ctk.CTk):
         self.frames["ai_conf"] = ctk.CTkFrame(self.main_container, fg_color=frame_bg)
         self.setup_page_ai(self.frames["ai_conf"])
 
-        self.frames["advanced"] = ctk.CTkFrame(self.main_container, fg_color=frame_bg)
+        self.frames["advanced"] = ctk.CTkScrollableFrame(self.main_container, fg_color="transparent")
         self.setup_page_advanced(self.frames["advanced"])
 
         self.frames["help"] = ctk.CTkFrame(self.main_container, fg_color=frame_bg)
@@ -234,7 +236,7 @@ class TranslatorApp(ctk.CTk):
         self.btn_ai.pack(fill="x", padx=15, pady=20, side="bottom")
 
         # 카드 3: 적용
-        card3 = self.create_workflow_card(parent, "STEP 3. 게임 적용", "#27AE60", 2)
+        card3 = self.create_workflow_card(parent, "STEP 3. 적용 파일 생성", "#27AE60", 2)
         ctk.CTkLabel(card3, text="번역된 DB 파일:", font=("Arial", 12)).pack(anchor="w", padx=15, pady=(10, 0))
         
         db_box = ctk.CTkFrame(card3, fg_color="transparent")
@@ -268,7 +270,11 @@ class TranslatorApp(ctk.CTk):
         
         self.create_path_row(container, "원본 폴더 (Source):", self.path_src, is_folder=True, desc="게임의 원본 assets 혹은 텍스트 파일이 있는 폴더")
         self.create_path_row(container, "저장 폴더 (Output):", self.path_out, is_folder=True, desc="추출된 텍스트와 번역 결과물이 저장될 폴더")
-        self.create_path_row(container, "용어집 (Glossary):", self.path_glossary, is_folder=False, desc="고유명사 번역을 고정할 JSON/TXT 파일")
+        self.create_path_row(container, "용어집 (Glossary):", self.path_glossary, is_folder=False, desc="고유명사 번역을 고정할 CVB/JSON/TXT 파일")
+        btn_sample = ctk.CTkButton(container, text="📘 용어집 샘플 양식 생성", 
+                                  command=self.generate_sample_glossary, 
+                                  fg_color="#5D6D7E", width=200)
+        btn_sample.pack(pady=10)
         
         ctk.CTkLabel(container, text="* 경로는 자동으로 저장됩니다.", text_color="gray").pack(pady=20)
 
@@ -313,6 +319,121 @@ class TranslatorApp(ctk.CTk):
         ctk.CTkButton(btn_box, text="🔄 가격표 갱신 (Web)", command=self.update_price_data, fg_color="#34495E").pack(side="left", padx=5)
         ctk.CTkButton(btn_box, text="💸 예상 비용 산출 (전체 스캔)", command=self.run_cost_estimation, fg_color="#2980B9").pack(side="left", padx=5)
 
+    def run_masking_apply(self):
+        target_file = self.path_mask_target.get()
+        glossary_file = self.path_glossary.get()
+
+        if not self._check_masking_files(target_file, glossary_file): return
+
+        if not messagebox.askyesno("확인", f"파일 내용을 마스킹 처리하시겠습니까?\n(일본어 원문 → 마스킹 토큰)"):
+            return
+
+        try:
+            glossary_data = utils.load_glossary_data(glossary_file)
+            if not glossary_data: return
+
+            with open(target_file, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+
+            count = 0
+            # 긴 단어부터 순차적으로 마스킹 토큰으로 치환
+            for item in glossary_data:
+                src = item['src']
+                mask_id = item['mask_id']
+                if src in content:
+                    count += content.count(src)
+                    content = content.replace(src, mask_id)
+
+            self._save_masked_file(target_file, content, "_MASKED.txt", f"마스킹 적용 완료")
+
+        except Exception as e:
+            messagebox.showerror("오류", f"작업 중 오류: {e}")
+
+    # [신규 함수 2] 마스킹 해제: 
+    # 좌변(원문위치) -> 일본어 원문 복원
+    # 우변(번역위치) -> 한국어 추천 번역 적용
+    def run_masking_release(self):
+        target_file = self.path_mask_target.get()
+        glossary_file = self.path_glossary.get()
+
+        if not self._check_masking_files(target_file, glossary_file): return
+
+        if not messagebox.askyesno("확인", f"마스킹을 해제하고 번역을 적용하시겠습니까?\n(Left: 원문복원 / Right: 한국어적용)"):
+            return
+
+        try:
+            glossary_data = utils.load_glossary_data(glossary_file)
+            if not glossary_data: return
+
+            with open(target_file, 'r', encoding='utf-8', errors='replace') as f:
+                lines = f.readlines()
+
+            processed_lines = []
+            replace_count = 0
+
+            for line in lines:
+                # DB 파일 형식 (Key=Value)인 경우 분리 처리
+                if '=' in line:
+                    parts = line.split('=', 1)
+                    left = parts[0]
+                    right = parts[1] if len(parts) > 1 else ""
+                    
+                    # 마스킹 ID를 찾아 복원
+                    for item in glossary_data:
+                        mask_id = item['mask_id']
+                        if mask_id in line:
+                            # 좌변: 원문(src)으로 복원
+                            if mask_id in left:
+                                left = left.replace(mask_id, item['src'])
+                            # 우변: 번역문(tgt)으로 치환
+                            if mask_id in right:
+                                right = right.replace(mask_id, item['tgt'])
+                                replace_count += 1
+                    
+                    processed_lines.append(f"{left}={right}")
+                else:
+                    # '=' 없는 일반 텍스트의 경우 (안전책: 그냥 번역문으로 치환)
+                    temp_line = line
+                    for item in glossary_data:
+                        if item['mask_id'] in temp_line:
+                            temp_line = temp_line.replace(item['mask_id'], item['tgt'])
+                            replace_count += 1
+                    processed_lines.append(temp_line)
+
+            content = "".join(processed_lines)
+            self._save_masked_file(target_file, content, "_UNMASKED.txt", f"마스킹 해제 완료")
+
+        except Exception as e:
+            messagebox.showerror("오류", f"작업 중 오류: {e}")
+
+    # [헬퍼] 파일 유효성 검사
+    def _check_masking_files(self, target, glossary):
+        if not target or not os.path.exists(target):
+            messagebox.showerror("오류", "대상 파일을 선택해주세요.")
+            return False
+        if not glossary or not os.path.exists(glossary):
+            messagebox.showerror("오류", "프로젝트 설정에서 '용어집'을 먼저 설정해주세요.")
+            return False
+        return True
+
+    # [헬퍼] 파일 저장 및 알림
+    def _save_masked_file(self, original_path, content, suffix, msg):
+        dir_name = os.path.dirname(original_path)
+        base_name = os.path.splitext(os.path.basename(original_path))[0]
+        
+        # 파일명 중복 방지를 위해 기존 suffix 제거 시도
+        if base_name.endswith("_MASKED"): base_name = base_name.replace("_MASKED", "")
+        if base_name.endswith("_UNMASKED"): base_name = base_name.replace("_UNMASKED", "")
+            
+        save_path = os.path.join(dir_name, f"{base_name}{suffix}")
+
+        with open(save_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        self.log(f">> {msg}")
+        messagebox.showinfo("완료", f"{msg}\n저장 경로: {save_path}")
+        os.startfile(dir_name)
+
     # --- 4. 고급 설정 ---
     def setup_page_advanced(self, parent):
         # 섹션 1: AI 튜닝
@@ -351,6 +472,48 @@ class TranslatorApp(ctk.CTk):
         self.entry_tag_custom = ctk.CTkEntry(rule_row, textvariable=self.tag_custom_pattern, placeholder_text="Regex", state="disabled")
         self.entry_tag_custom.pack(side="left", padx=5, fill="x", expand=True)
 
+        frame_tool = ctk.CTkFrame(parent)
+        frame_tool.pack(fill="x", padx=20, pady=20)
+        
+        ctk.CTkLabel(frame_tool, text="🛠️ 독립형 용어집 마스킹 (File Utility)", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=10)
+        
+        desc = "용어집(Glossary)을 사용하여 텍스트 파일 내의 특정 단어를 치환하거나 복원합니다."
+        ctk.CTkLabel(frame_tool, text=desc, text_color="gray", font=("Arial", 11)).pack(anchor="w", padx=10, pady=(0, 5))
+
+        # 입력 파일 선택 UI
+        tool_row = ctk.CTkFrame(frame_tool, fg_color="transparent")
+        tool_row.pack(fill="x", padx=10, pady=10)
+        
+        self.entry_mask_target = ctk.CTkEntry(
+            tool_row, 
+            textvariable=self.path_mask_target, 
+            placeholder_text="작업할 텍스트 파일 선택 (.txt)"
+        )
+        self.entry_mask_target.pack(side="left", fill="x", expand=True)
+        
+        ctk.CTkButton(
+            tool_row, text="📂", width=40, 
+            command=lambda: self.browse_path(self.path_mask_target, False)
+        ).pack(side="left", padx=5)
+
+        # [수정] 버튼 2개 배치 (적용 / 해제)
+        btn_grid = ctk.CTkFrame(frame_tool, fg_color="transparent")
+        btn_grid.pack(fill="x", padx=10, pady=(0, 15))
+        
+        # 적용 버튼 (원문 -> 마스킹)
+        ctk.CTkButton(
+            btn_grid, text="🔒 마스킹 적용 (Apply)", 
+            fg_color="#D35400", hover_color="#A04000",
+            command=self.run_masking_apply
+        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        # 해제 버튼 (마스킹 -> 원문/번역 복원)
+        ctk.CTkButton(
+            btn_grid, text="🔓 마스킹 해제 (Release)", 
+            fg_color="#27AE60", hover_color="#1E8449",
+            command=self.run_masking_release
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+
         # 초기화 버튼
         ctk.CTkButton(parent, text="🔄 공장 초기화 (설정 리셋)", fg_color="#C0392B", command=self.reset_to_defaults).pack(pady=20)
 
@@ -362,25 +525,24 @@ class TranslatorApp(ctk.CTk):
         help_textbox.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         
         guide_text = """
-[STEP 1] 텍스트 추출
-1. '프로젝트 설정' 탭에서 게임의 원본 폴더(Source)를 지정합니다.
-2. '추출 시작' 버튼을 누르면 게임 내 텍스트가 txt 파일로 추출됩니다.
-3. 팁: '대사 괄호 보호'를 켜면 이름이나 중요 구문을 보호할 수 있습니다.
+[필독: 사용 전 주의사항]
+본 프로그램은 '데이터 가공 및 번역 보조 도구'입니다.
+반드시 UABEA, dnSpy 등으로 에셋을 먼저 추출한 뒤 사용하십시오.
 
-[STEP 2] AI 번역
-1. 추출된 텍스트 파일을 선택합니다.
-2. 'AI 설정' 탭에서 API Key가 올바른지 확인하세요.
-3. 번역이 시작되면 실시간으로 진행률이 표시됩니다.
-4. 비용 절약을 위해 '고급 설정'에서 프롬프트를 최적화할 수 있습니다.
+[STEP 1] 번역 데이터 추출
+- 원본 폴더: 추출된 에셋들이 담긴 폴더 지정
+- 결과: 번역용 통합 파일 생성 (형식: 원문=)
 
-[STEP 3] 게임 적용
-1. 번역이 완료된 파일(txt/json)을 선택합니다.
-2. '적용 시작'을 누르면 게임 파일에 번역문이 입혀집니다.
-3. '스마트 모드'를 켜면 기존 형식을 최대한 유지하며 적용합니다.
+[STEP 2] AI 초벌 번역
+- JSON 경유, 마스킹 기능을 통해 게임 태그 및 고유명사 보호 가능
+- 결과: 번역 완료 파일 생성 (형식: 원문=번역문)
+
+[STEP 3] 적용 파일 생성
+- 번역된 내용을 원본 에셋 형식에 맞춰 재구성
+- 생성된 파일을 UABEA 등을 이용해 게임에 다시 삽입하십시오.
 
 [문제 해결]
-- 번역이 멈춘 경우: API 사용량 한도를 확인하거나 '고급 설정'의 Delay를 늘려보세요.
-- 글자가 깨지는 경우: 게임 폰트가 한글을 지원하는지 확인해야 합니다.
+- AI 번역이 멈춘 경우: API 사용량 한도를 확인하거나 '고급 설정'의 Delay를 늘려보세요.
 """
         help_textbox.insert("1.0", guide_text)
         help_textbox.configure(state="disabled")
@@ -446,19 +608,19 @@ class TranslatorApp(ctk.CTk):
         # TAB 2: 라이선스
         license_text = """
 [저작권 고지 (Copyright)]
-Copyright © 2025 anysong. All rights reserved.
-이 프로그램은 CC BY-NC-ND 4.0 (저작자 표시-비영리-변경 금지) 라이선스를 따릅니다.
-- 개인적인 용도로만 사용 가능하며, 상업적 이용 및 무단 재배포를 금지합니다.
+- 본 프로그램의 모든 권리는 저작권자(anysong)에게 있습니다.
+- Copyright © 2025 anysong. All rights reserved.
+- 이 프로그램은 CC BY-NC-ND 4.0 라이선스를 따릅니다.
+- 비영리 목적의 개인 사용만 가능하며, 상업적 이용 및 수정 재배포를 금지합니다.
 
 [면책 조항 (Disclaimer)]
-1. 본 프로그램은 사용자가 보유한 게임 파일의 텍스트 데이터를 추출하고 수정(Injection)하는 도구입니다.
-2. 본 프로그램을 사용하여 발생하는 게임 서비스 이용 제한(밴), 세이브 파일 손상, 게임사의 서비스 이용약관(EULA) 위반 등 모든 기술적/법적 책임은 사용자 본인에게 있습니다.
-3. 제작자는 본 프로그램을 사용하여 발생하는 어떠한 손해(데이터 유실, 계정 정지 등)에 대해서도 책임을 지지 않습니다.
-4. 사용자는 반드시 원본 파일을 백업한 후 프로그램을 사용하시기 바랍니다.
-
-[소스 코드 공개]
-본 프로그램의 소스 코드는 추후 GitHub를 통해 공개될 예정입니다.
+- 본 프로그램은 데이터 가공 보조 도구로, 게임 바이너리를 직접 수정하지 않습니다.
+- 사용자는 외부 툴(UABEA 등)을 통해 추출된 데이터를 준비해야 합니다.
+- 소프트웨어 사용으로 인한 모든 기술적/법적 책임은 사용자 본인에게 있습니다.
+- 게임사 가이드라인 및 이용약관(EULA) 위반 여부를 반드시 확인하십시오.
+- AI 번역 시 발생하는 API 비용은 사용자 부담입니다.
 """
+
         textbox = ctk.CTkTextbox(tab_legal, font=("Malgun Gothic", 12))
         textbox.pack(fill="both", expand=True, padx=10, pady=10)
         textbox.insert("1.0", license_text)
@@ -470,7 +632,7 @@ Copyright © 2025 anysong. All rights reserved.
     def setup_log_panel(self):
         # [FIX 3] 프로그레스바와 파일명 표시줄 분리
         # 우측 하단 고정 프레임
-        self.log_frame = ctk.CTkFrame(self, height=180, corner_radius=0)
+        self.log_frame = ctk.CTkFrame(self, height=300, corner_radius=0)
         self.log_frame.grid(row=1, column=1, sticky="nsew") 
         
         # [ROW 1] 진행률 바 + % 숫자
@@ -489,7 +651,7 @@ Copyright © 2025 anysong. All rights reserved.
         self.lbl_status.pack(fill="x", padx=10, pady=(0, 5))
 
         # [ROW 3] 상세 로그 박스
-        self.log_box = ctk.CTkTextbox(self.log_frame, height=100, font=("Consolas", 10))
+        self.log_box = ctk.CTkTextbox(self.log_frame, height=210, font=("Consolas", 10))
         self.log_box.pack(fill="both", expand=True, padx=5, pady=(0, 5))
         self.log_box.configure(state="disabled")
 
@@ -684,26 +846,52 @@ Copyright © 2025 anysong. All rights reserved.
  [Game Translator Pro] - Game Translation Asset Injector
 ===========================================================
 
+# 🎮 Game Translator Pro
+
+**Game Translator Pro**는 Unity 게임 및 텍스트 기반 게임 자산을 위한 **AI 기반 자동 번역 도구**입니다.
+Python과 CustomTkinter로 제작되었으며, 텍스트 추출부터 AI 번역, 게임 내 적용까지의 워크플로우를 자동화하여 번역가와 모더의 작업을 돕습니다.
+
+## ✨ 주요 기능 (Key Features)
+
+* **🛠️ 스마트 텍스트 추출 (Smart Extraction)**
+    * Unity 에셋 덤프(`UABEA` 등) 파일에서 `m_Text`, `#speaker` 등 불필요한 코드를 제거하고 순수 대사만 추출합니다.
+    * 일본어, 영어 등 유효한 텍스트가 있는 라인만 자동으로 선별합니다.
+
+* **🤖 멀티 AI 모델 지원**
+    * **OpenAI** (GPT-4o, GPT-4-Turbo 등)
+    * **Google** (Gemini 2.5 Pro/Flash)
+    * **Anthropic** (Claude 3.5 Sonnet)
+    * **DeepL** API 지원
+    * 실시간 가격 및 모델 정보를 불러와 **예상 번역 비용**을 미리 계산해줍니다.
+
+* **🛡️ 용어집 및 마스킹 (Glossary & Masking)**
+    * 고유명사 보호 및 안전필터 회피를 위한 **마스킹 시스템** (`__MASK_001__`) 탑재.
+    * 3단 용어집 지원 (`원문, 의미/힌트, 번역문`)으로 AI에게 문맥 힌트를 제공하여 번역 품질을 극대화합니다.
+    * CSV, TXT 형식의 용어집을 지원합니다.
+
+* **⚡ 사용자 편의성**
+    * **CustomTkinter** 기반의 깔끔한 Dark/Light 모드 GUI.
+    * 대용량 파일 처리를 위한 멀티스레딩 지원.
+    * 작업 진행 상황 실시간 로그 및 프로그레스 바 표시.
+
 1. 저작권 고지 (Copyright)
 -----------------------------------------------------------
 본 프로그램의 모든 권리는 저작권자(anysong)에게 있습니다.
 Copyright © 2025 anysong. All rights reserved.
+이 프로그램은 CC BY-NC-ND 4.0 라이선스를 따릅니다.
+비영리 목적의 개인 사용만 가능하며, 상업적 이용 및 수정 재배포를 금지합니다.
 
-본 프로그램은 Creative Commons (CC BY-NC-ND 4.0) 라이선스를 따릅니다.
-- 저작자 표시: 원저작자를 명시해야 합니다.
-- 비영리: 본 프로그램을 유료로 판매하거나 상업적 목적으로 이용할 수 없습니다.
-- 변경 금지: 본 프로그램을 수정, 변형하여 재배포하는 것을 금지합니다.
-
-2. 면책 조항 (Disclaimer)
------------------------------------------------------------
-- 본 프로그램은 게임 파일의 데이터를 수정(Injection)하는 기능을 포함하고 있습니다.
-- 프로그램 사용으로 인해 발생하는 게임 서비스 이용 제한(밴), 세이브 파일 손상, 
-  모든 기술적/법적 책임은 사용자 본인에게 있습니다.
-- 사용자는 반드시 원본 파일을 백업한 후 프로그램을 사용하시기 바랍니다.
+2. 면책 조항 (Disclaimer)]
+- 본 프로그램은 데이터 가공 보조 도구로, 게임 바이너리를 직접 수정하지 않습니다.
+- 사용자는 외부 툴(UABEA 등)을 통해 추출된 데이터를 준비해야 합니다.
+- 소프트웨어 사용으로 인한 모든 기술적/법적 책임은 사용자 본인에게 있습니다.
+- 게임사 가이드라인 및 이용약관(EULA) 위반 여부를 반드시 확인하십시오.
+- AI 번역 시 발생하는 API 비용은 사용자 부담입니다.
 
 3. 후원 및 문의
 -----------------------------------------------------------
 개발자의 지속적인 업데이트를 지원하고 싶으시다면 아래 링크를 확인해주세요.
+https://toon.at/donate/anysong0000
 (프로그램 내 '정보' 탭에서 후원 버튼을 클릭할 수 있습니다.)
 ===========================================================
 """
@@ -713,6 +901,33 @@ Copyright © 2025 anysong. All rights reserved.
                 f.write(content)
             messagebox.showinfo("완료", f"README.txt 파일이 생성되었습니다:\n{path}")
             os.startfile(path)
+        except Exception as e:
+            messagebox.showerror("오류", f"파일 생성 실패: {e}")
+
+    def generate_sample_glossary(self):
+        
+        # CSV 샘플
+        sample_csv = (
+            "일본어 원문,의미/설명,한국어 추천 번역\n"
+            "ハァハァ,거친 숨소리,하아하아\n"
+            "ドキッ,심장이 뛰는 소리,두근"
+        )
+        
+        #TXT 샘플
+        sample_txt = "일본어 원문,의미/설명,한국어 추천 번역\nハァハァ,거친 숨소리,하아하아"
+        
+        try:
+            # 2종 파일 저장
+            paths = {
+                "TXT": os.path.join(BASE_DIR, "glossary_sample.txt"),
+                "CSV": os.path.join(BASE_DIR, "glossary_sample.csv")
+            }
+            
+            with open(paths["TXT"], "w", encoding="utf-8") as f: f.write(sample_txt)
+            with open(paths["CSV"], "w", encoding="utf-8-sig") as f: f.write(sample_csv) # 엑셀 호환용
+                
+            messagebox.showinfo("완료", "용어집 샘플 2종(TXT, CSV)이 생성되었습니다.")
+            os.startfile(BASE_DIR) 
         except Exception as e:
             messagebox.showerror("오류", f"파일 생성 실패: {e}")
 
