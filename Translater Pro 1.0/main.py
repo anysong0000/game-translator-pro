@@ -424,7 +424,7 @@ class TranslatorApp(ctk.CTk):
         # 투네이션 버튼 (닉네임 확인 가능)
         ctk.CTkButton(btn_box, text="투네이션으로 후원 (닉네임 가능)", 
                       fg_color="#0064FF", hover_color="#0052D1",
-                      command=lambda: open_link("https://toon.at/donate/anysong")).pack(side="left", padx=10)
+                      command=lambda: open_link("https://toon.at/donate/anysong0000")).pack(side="left", padx=10)
         
         # 깃허브 버튼 (신뢰도용)
         ctk.CTkButton(btn_box, text="GitHub 프로젝트 방문", fg_color="#24292e", 
