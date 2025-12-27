@@ -1,0 +1,12 @@
+# 파이썬 임시 파일 및 라이브러리 제외
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# 설정 및 로그 파일 제외 (실명 및 API Key 보호)
+config.ini
+*.log
+
+# 에디터 설정 제외
+.vscode/
