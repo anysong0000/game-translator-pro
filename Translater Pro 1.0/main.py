@@ -401,17 +401,16 @@ class TranslatorApp(ctk.CTk):
         ctk.CTkLabel(info_frame, text="Version: 1.0", text_color="gray").pack()
         ctk.CTkLabel(info_frame, text="Developed by anysong", font=("Arial", 12)).pack(pady=10)
         
-        # 1. 후원 프레임 테두리 (라이트: 진한 금색, 다크: 밝은 노랑)
-        sponsor_frame = ctk.CTkFrame(tab_info, border_width=2, border_color=("#D4AC0D", "#F1C40F"))
+        # 1. 후원 프레임 테두리
+        sponsor_frame = ctk.CTkFrame(tab_info, border_width=2, border_color=("#0064FF", "#3B8ED0"))
         sponsor_frame.pack(fill="x", padx=20, pady=10)
         
-        # 2. 후원 제목 (라이트: 진한 금색, 다크: 밝은 노랑)
-        ctk.CTkLabel(sponsor_frame, text="☕ 개발자에게 커피 한 잔 후원하기", 
-                     font=("Arial", 16, "bold"), text_color=("#D4AC0D", "#F1C40F")).pack(pady=(20, 10))
+        ctk.CTkLabel(sponsor_frame, text="💙 프로그램 개발 응원하기", 
+                     font=("Arial", 18, "bold"), text_color=("#0064FF", "#3B8ED0")).pack(pady=(20, 10))
         
         sponsor_msg = (
-            "이 프로그램은 개인 개발자에 의해 만들어졌습니다.\n"
-            "여러분의 후원은 서버 유지, 기능 업데이트, 그리고 제 커피값에 큰 도움이 됩니다."
+            "후원 시 남겨주신 닉네임과 응원 메시지는 개발자에게 큰 힘이 됩니다!\n"
+            "보내주신 후원금은 사리사욕을 위해 소중히 사용하겠습니다."
         )
         ctk.CTkLabel(sponsor_frame, text=sponsor_msg, text_color=("black", "white")).pack(pady=(0, 20))
         
@@ -422,11 +421,19 @@ class TranslatorApp(ctk.CTk):
             import webbrowser
             webbrowser.open(url)
 
-        ctk.CTkButton(btn_box, text="Buy Me a Coffee", fg_color="#FFDD00", text_color="black",
-                      command=lambda: open_link("https://buymeacoffee.com/")).pack(side="left", padx=10)
+        # 투네이션 버튼 (닉네임 확인 가능)
+        ctk.CTkButton(btn_box, text="투네이션으로 후원 (닉네임 가능)", 
+                      fg_color="#0064FF", hover_color="#0052D1",
+                      command=lambda: open_link("https://toon.at/donate/anysong")).pack(side="left", padx=10)
         
-        ctk.CTkButton(btn_box, text="GitHub Sponsor", fg_color="#24292e", 
+        # 깃허브 버튼 (신뢰도용)
+        ctk.CTkButton(btn_box, text="GitHub 프로젝트 방문", fg_color="#24292e", 
                       command=lambda: open_link("https://github.com/")).pack(side="left", padx=10)
+
+        # 2. 하단 안내
+        notice_lbl = ctk.CTkLabel(tab_info, text="* 후원 후 알려주시면 다음 버전 '도움주신 분들'에 기록해 드립니다.", 
+                                  font=("Arial", 11), text_color="gray")
+        notice_lbl.pack(pady=5)
 
         # 3. 유틸리티
         util_frame = ctk.CTkFrame(tab_info, fg_color="transparent")
