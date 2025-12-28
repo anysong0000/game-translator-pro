@@ -13,13 +13,15 @@ import deepl
 from google import genai
 from google.genai import types
 
+import utils
+
 # ==========================================
 # [설정] 기본 UI 표시용 모델 목록
 # ==========================================
 PROVIDER_MODELS = {
     "OPENAI": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
     "ANTHROPIC": ["claude-3-5-sonnet-20240620", "claude-3-haiku-20240307"],
-    "GOOGLE": ["gemini-1.5-pro", "gemini-1.5-flash"],
+    "GOOGLE": ["gemini-2.5-pro", "gemini-2.5-flash"],
     "DEEPL": ["DeepL API (Character based)"]
 }
 
@@ -244,51 +246,84 @@ class DeepLProvider(BaseProvider):
         result = self.translator.translate_text(user_text, target_lang="KO", preserve_formatting=True)
         return result.text
 
-def calculate_estimates(src_dir, provider, model, log_callback):
-    if not src_dir or not os.path.exists(src_dir):
-        log_callback("!! 원본 폴더 경로가 올바르지 않습니다.")
+def calculate_estimates(target_path, provider, model, log_callback):
+    if not target_path or not os.path.exists(target_path):
+        log_callback("!! 대상 경로가 올바르지 않습니다.")
         return None
+        
     pricing_engine.load_data()
+    
     total_chars = 0
     total_tokens = 0
     file_count = 0
     total_lines = 0
+    
     enc = None
     if provider == "OPENAI":
         try: enc = tiktoken.encoding_for_model(model)
         except: enc = tiktoken.get_encoding("cl100k_base")
 
-    files = [f for f in os.listdir(src_dir) if f.lower().endswith(('.txt', '.json'))]
+    # [수정] 파일인지 폴더인지 판단하여 목록 생성
+    files_to_process = []
+    root_dir = ""
+
+    if os.path.isfile(target_path):
+        # 단일 파일인 경우
+        root_dir = os.path.dirname(target_path)
+        files_to_process = [os.path.basename(target_path)]
+    else:
+        # 폴더인 경우
+        root_dir = target_path
+        files_to_process = [f for f in os.listdir(root_dir) if f.lower().endswith(('.txt', '.json'))]
     
-    for fname in files:
+    if not files_to_process:
+        log_callback("!! 처리할 텍스트 파일(.txt, .json)이 없습니다.")
+        return None
+
+    # 파일 처리 루프
+    for fname in files_to_process:
+        full_path = os.path.join(root_dir, fname)
         try:
-            with open(os.path.join(src_dir, fname), "r", encoding="utf-8", errors='ignore') as f:
+            with open(full_path, "r", encoding="utf-8", errors='ignore') as f:
                 lines = [l for l in f.readlines() if l.strip()]
                 text = "".join(lines)
+            
             total_chars += len(text)
             total_lines += len(lines)
-            if provider == "OPENAI" and enc: total_tokens += len(enc.encode(text))
-            else: total_tokens += int(len(text) / 3.5)
+            
+            if provider == "OPENAI" and enc: 
+                total_tokens += len(enc.encode(text))
+            else: 
+                # 토크나이저가 없는 경우 대략적인 추산 (한글/영어 혼합 고려)
+                total_tokens += int(len(text) / 3.0) 
+                
             file_count += 1
-        except: pass
+        except Exception as e: 
+            log_callback(f"!! 파일 읽기 제외 ({fname}): {e}")
             
     estimated_cost = 0.0
     estimated_time_sec = 0.0
     
     if provider == "DEEPL":
+        # DeepL은 글자수 기반 (백만 자당 $25 가정)
         estimated_cost = (total_chars / 1_000_000) * 25.00
     else:
+        # LLM은 토큰 기반
         in_price, out_price = pricing_engine.get_price(model)
+        # 입력 비용 + 출력 비용(입력의 1.2배 길이 가정)
         input_cost = (total_tokens / 1_000_000) * in_price
         output_cost = ((total_tokens * 1.2) / 1_000_000) * out_price 
         estimated_cost = input_cost + output_cost
 
+    # 예상 시간 (청크 단위 요청 딜레이 고려)
     CHUNK_SIZE = 20
     total_chunks = math.ceil(total_lines / CHUNK_SIZE)
     estimated_time_sec = total_chunks * 2.5 
 
     log_callback(f"=== [{provider}] 견적 산출 결과 ===")
+    log_callback(f"• 대상: {'단일 파일' if os.path.isfile(target_path) else '폴더'}")
     log_callback(f"• 파일: {file_count}개 / 라인: {total_lines:,}줄")
+    log_callback(f"• 토큰(추산): 약 {total_tokens:,} tokens")
     log_callback(f"• 예상 비용: ${estimated_cost:.4f}")
     log_callback(f"• 예상 소요 시간: 약 {timedelta(seconds=int(estimated_time_sec))}")
     
@@ -452,8 +487,15 @@ class TranslationProcessor:
                     else:
                         clean_text = line.strip()
 
-                    masked_text, active_masks = self.glossary_mgr.apply_masking(clean_text)
-                    
+                    # [수정] 옵션에 따라 마스킹 적용 여부 결정
+                    if self.options.get('auto_mask', True):
+                        # 마스킹 적용
+                        masked_text, active_masks = self.glossary_mgr.apply_masking(clean_text)
+                    else:
+                        # 마스킹 미적용 (원문 그대로 사용)
+                        masked_text = clean_text
+                        active_masks = {}
+
                     chunk_data.append({"id": local_id, "text": masked_text})
                     chunk_map[local_id] = {"orig": clean_text, "masks": active_masks}
 
@@ -485,7 +527,12 @@ class TranslationProcessor:
                             
                             if lid in chunk_map and trans_text:
                                 orig_info = chunk_map[lid]
-                                final_trans = self.glossary_mgr.restore_masking(trans_text, orig_info['masks'])
+                                # 옵션 키 'auto_restore'가 없으면 기본값 True (기존 동작 유지)
+                                if self.options.get('auto_restore', True):
+                                    final_trans = self.glossary_mgr.restore_masking(trans_text, orig_info['masks'])
+                                else:
+                                    # 해제하지 않고 저장
+                                    final_trans = trans_text
                                 translation_map[orig_info['orig']] = final_trans
                 except json.JSONDecodeError:
                     self.log(f"!! JSON 파싱 실패 (청크 {i//CHUNK_SIZE}). 원문 유지.")
@@ -529,44 +576,26 @@ class TranslationProcessor:
 
 class GlossaryManager:
     def __init__(self, glossary_path):
-        self.term_map = []
-        if glossary_path and os.path.exists(glossary_path):
-            self._load(glossary_path)
+        # utils의 표준 로더 사용 (mask_id 형식 통일)
+        self.term_map = utils.load_glossary_data(glossary_path)
     
-    def _load(self, path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('//'): continue
-
-                    if ',' in line:
-                        parts = line.split(',', 2) 
-                        src = parts[0].strip()
-                        tgt = parts[1].strip()
-                        hint = parts[2].strip() if len(parts) > 2 else ""
-                        self.term_map.append({'src': src, 'tgt': tgt, 'hint': hint})
-                    
-                    elif '=' in line:
-                        parts = line.split('=', 1)
-                        self.term_map.append({'src': parts[0].strip(), 'tgt': parts[1].strip(), 'hint': ""})
-            
-            self.term_map.sort(key=lambda x: len(x['src']), reverse=True)
-        except Exception as e:
-            print(f"용어집 로드 실패: {e}")
-
     def apply_masking(self, text):
         active_masks = {}
         masked_text = text
-        for i, term in enumerate(self.term_map):
-            if term['src'] in masked_text:
-                mask_token = f"__MASK_{i:03d}__"
-                masked_text = masked_text.replace(term['src'], mask_token)
-                active_masks[mask_token] = term 
+        
+        # utils에서 로드된 mask_id (__MSK_XXXX__) 사용
+        for item in self.term_map:
+            src = item['src']
+            mask_id = item['mask_id']
+            if src in masked_text:
+                masked_text = masked_text.replace(src, mask_id)
+                active_masks[mask_id] = item
+                
         return masked_text, active_masks
 
     def restore_masking(self, text, active_masks):
         restored = text
+        # 번역 결과를 복원하므로 item['tgt'] (번역문) 사용
         for token, info in active_masks.items():
             restored = restored.replace(token, info['tgt'])
         return restored

@@ -17,6 +17,7 @@ from tkinter import filedialog, messagebox
 import os
 import threading
 import configparser
+import sys
 
 # 모듈 가져오기 (사용자 기존 모듈 유지)
 import logic
@@ -27,7 +28,11 @@ import utils
 # 설정 및 상수
 # ==========================================
 WINDOW_TITLE = "Game Translator Pro v1.0"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
 
 # 기본 프롬프트
@@ -46,6 +51,11 @@ class TranslatorApp(ctk.CTk):
         super().__init__()
         self.title(WINDOW_TITLE)
         self.geometry("900x800")
+
+        try:
+            self.iconbitmap(os.path.join(BASE_DIR, "translator_icon.ico"))
+        except:
+            pass
         
         # [레이아웃 그리드 설정]
         # column 0: 사이드바 (고정 폭)
@@ -69,7 +79,6 @@ class TranslatorApp(ctk.CTk):
         self.refresh_model_list(init=True)
 
     def init_variables(self):
-        # 기존 변수 그대로 유지
         self.path_src = tk.StringVar()
         self.path_out = tk.StringVar()
         self.path_db = tk.StringVar()
@@ -81,7 +90,10 @@ class TranslatorApp(ctk.CTk):
         self.opt_group_brackets = tk.BooleanVar(value=True)
         self.opt_extract_masking = tk.BooleanVar(value=False)
         
-        self.db_format = tk.StringVar(value=".txt")
+        self.db_format = tk.StringVar(value="자동감지 (Auto)")
+        if not hasattr(self, 'val_newline'): self.val_newline = tk.StringVar(value="[ENTER]")
+        if not hasattr(self, 'val_space'): self.val_space = tk.StringVar(value="[NBSP]")
+
         self.opt_smart_mode = tk.BooleanVar(value=True)
         self.opt_smart_save = tk.BooleanVar(value=True)
         self.key_newline = tk.StringVar(value="\\n")
@@ -100,6 +112,12 @@ class TranslatorApp(ctk.CTk):
         self.ai_temperature = tk.DoubleVar(value=0.1)
         self.ai_force_json = tk.BooleanVar(value=True)
         self.ai_request_delay = tk.DoubleVar(value=0.5)
+        self.ai_auto_mask = tk.BooleanVar(value=True)
+        self.ai_auto_restore = tk.BooleanVar(value=True)
+
+        self.opt_smart_header = tk.BooleanVar(value=True)  # 헤더 보호
+        self.opt_smart_json = tk.BooleanVar(value=True)    # JSON 문법 교정
+        self.opt_smart_special = tk.BooleanVar(value=True) # 특수문자 처리
 
     # ================================================================
     # [UI Part 1] 사이드바 (Navigation)
@@ -270,7 +288,7 @@ class TranslatorApp(ctk.CTk):
         
         self.create_path_row(container, "원본 폴더 (Source):", self.path_src, is_folder=True, desc="게임의 원본 assets 혹은 텍스트 파일이 있는 폴더")
         self.create_path_row(container, "저장 폴더 (Output):", self.path_out, is_folder=True, desc="추출된 텍스트와 번역 결과물이 저장될 폴더")
-        self.create_path_row(container, "용어집 (Glossary):", self.path_glossary, is_folder=False, desc="고유명사 번역을 고정할 CVB/JSON/TXT 파일")
+        self.create_path_row(container, "용어집 (Glossary):", self.path_glossary, is_folder=False, desc="고유명사 번역을 고정할 CVB/TXT 파일")
         btn_sample = ctk.CTkButton(container, text="📘 용어집 샘플 양식 생성", 
                                   command=self.generate_sample_glossary, 
                                   fg_color="#5D6D7E", width=200)
@@ -313,6 +331,21 @@ class TranslatorApp(ctk.CTk):
         tool_frame.pack(fill="x", padx=20, pady=20)
         ctk.CTkLabel(tool_frame, text="비용 관리 및 도구", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=10)
         
+        # [추가] 비용 산출 대상 선택 UI
+        target_row = ctk.CTkFrame(tool_frame, fg_color="transparent")
+        target_row.pack(fill="x", padx=10, pady=(0, 5))
+        
+        ctk.CTkLabel(target_row, text="계산 대상:", width=80, anchor="w").pack(side="left", padx=(10, 0))
+        ctk.CTkEntry(target_row, textvariable=self.path_ai_input, placeholder_text="워크플로우의 '번역 대상'과 연동됩니다.").pack(side="left", fill="x", expand=True)
+        
+        # 파일/폴더 선택 버튼
+        ctk.CTkButton(target_row, text="📄 파일", width=50, 
+                      command=lambda: self.browse_path(self.path_ai_input, False),
+                      fg_color="#555").pack(side="left", padx=2)
+        ctk.CTkButton(target_row, text="📁 폴더", width=50, 
+                      command=lambda: self.browse_path(self.path_ai_input, True),
+                      fg_color="#555").pack(side="left", padx=2)
+
         btn_box = ctk.CTkFrame(tool_frame, fg_color="transparent")
         btn_box.pack(fill="x", padx=10, pady=10)
         
@@ -325,86 +358,43 @@ class TranslatorApp(ctk.CTk):
 
         if not self._check_masking_files(target_file, glossary_file): return
 
-        if not messagebox.askyesno("확인", f"파일 내용을 마스킹 처리하시겠습니까?\n(일본어 원문 → 마스킹 토큰)"):
+        if not messagebox.askyesno("확인", "파일 내용을 마스킹 처리하시겠습니까?\n(원문 → Mask ID)"):
             return
 
-        try:
-            glossary_data = utils.load_glossary_data(glossary_file)
-            if not glossary_data: return
+        # UI 멈춤 방지를 위해 스레드로 logic 함수 호출
+        self.log(f">> 마스킹 적용 시작...")
+        self.wrap_thread(
+            logic.process_db_masking, 
+            target_file, 
+            glossary_file, 
+            'apply', 
+            self.log
+        )
 
-            with open(target_file, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read()
-
-            count = 0
-            # 긴 단어부터 순차적으로 마스킹 토큰으로 치환
-            for item in glossary_data:
-                src = item['src']
-                mask_id = item['mask_id']
-                if src in content:
-                    count += content.count(src)
-                    content = content.replace(src, mask_id)
-
-            self._save_masked_file(target_file, content, "_MASKED.txt", f"마스킹 적용 완료")
-
-        except Exception as e:
-            messagebox.showerror("오류", f"작업 중 오류: {e}")
-
-    # [신규 함수 2] 마스킹 해제: 
-    # 좌변(원문위치) -> 일본어 원문 복원
-    # 우변(번역위치) -> 한국어 추천 번역 적용
     def run_masking_release(self):
         target_file = self.path_mask_target.get()
         glossary_file = self.path_glossary.get()
 
         if not self._check_masking_files(target_file, glossary_file): return
 
-        if not messagebox.askyesno("확인", f"마스킹을 해제하고 번역을 적용하시겠습니까?\n(Left: 원문복원 / Right: 한국어적용)"):
+        msg = (
+            "마스킹을 해제하고 번역을 적용하시겠습니까?\n\n"
+            "[작동 방식]\n"
+            "좌변 (= 왼쪽) : 용어집의 '원문'으로 복원\n"
+            "우변 (= 오른쪽) : 용어집의 '번역문'으로 치환"
+        )
+        if not messagebox.askyesno("확인", msg):
             return
 
-        try:
-            glossary_data = utils.load_glossary_data(glossary_file)
-            if not glossary_data: return
-
-            with open(target_file, 'r', encoding='utf-8', errors='replace') as f:
-                lines = f.readlines()
-
-            processed_lines = []
-            replace_count = 0
-
-            for line in lines:
-                # DB 파일 형식 (Key=Value)인 경우 분리 처리
-                if '=' in line:
-                    parts = line.split('=', 1)
-                    left = parts[0]
-                    right = parts[1] if len(parts) > 1 else ""
-                    
-                    # 마스킹 ID를 찾아 복원
-                    for item in glossary_data:
-                        mask_id = item['mask_id']
-                        if mask_id in line:
-                            # 좌변: 원문(src)으로 복원
-                            if mask_id in left:
-                                left = left.replace(mask_id, item['src'])
-                            # 우변: 번역문(tgt)으로 치환
-                            if mask_id in right:
-                                right = right.replace(mask_id, item['tgt'])
-                                replace_count += 1
-                    
-                    processed_lines.append(f"{left}={right}")
-                else:
-                    # '=' 없는 일반 텍스트의 경우 (안전책: 그냥 번역문으로 치환)
-                    temp_line = line
-                    for item in glossary_data:
-                        if item['mask_id'] in temp_line:
-                            temp_line = temp_line.replace(item['mask_id'], item['tgt'])
-                            replace_count += 1
-                    processed_lines.append(temp_line)
-
-            content = "".join(processed_lines)
-            self._save_masked_file(target_file, content, "_UNMASKED.txt", f"마스킹 해제 완료")
-
-        except Exception as e:
-            messagebox.showerror("오류", f"작업 중 오류: {e}")
+        # UI 멈춤 방지를 위해 스레드로 logic 함수 호출
+        self.log(f">> 마스킹 해제 및 번역 적용 시작...")
+        self.wrap_thread(
+            logic.process_db_masking, 
+            target_file, 
+            glossary_file, 
+            'restore', 
+            self.log
+        )
 
     # [헬퍼] 파일 유효성 검사
     def _check_masking_files(self, target, glossary):
@@ -434,8 +424,105 @@ class TranslatorApp(ctk.CTk):
         messagebox.showinfo("완료", f"{msg}\n저장 경로: {save_path}")
         os.startfile(dir_name)
 
+    def update_format_preview(self, choice):
+        """
+        [직관적 확인 기능]
+        선택된 모드에 따라 줄바꿈(\n)과 공백이 최종적으로 어떻게 변하는지 표시합니다.
+        """
+        preview_text = ""
+        is_custom = False
+        text_color = "gray70" # 기본 색상
+
+        if "자동감지" in choice:
+            preview_text = "ℹ️ 파일 확장자(.json / .txt)에 따라 아래 모드 중 하나가 자동 적용됩니다."
+            text_color = "#3498DB" # 파란색 계열 (정보)
+            
+        elif "TXT" in choice:
+            # TXT: 실제 줄바꿈이 일어남을 강조
+            preview_text = "✅ 줄바꿈 ➔ 실제 엔터(↵)   |   ✅ 공백 ➔ 특수공백(NBSP)"
+            text_color = "#2ECC71" # 초록색 계열 (적용)
+            
+        elif "JSON" in choice:
+            # JSON: 이스케이프 문자(\n)로 유지됨을 강조
+            preview_text = "✅ 줄바꿈 ➔ 문자열(\\\\n)   |   ✅ 공백 ➔ 실제 스페이스( )"
+            text_color = "#E67E22" # 주황색 계열 (주의)
+            
+        elif "사용자지정" in choice:
+            preview_text = "⚙️ 아래 입력칸(커스텀 설정)에 지정된 값으로 치환됩니다."
+            is_custom = True
+            text_color = "#9B59B6" # 보라색 계열 (커스텀)
+        
+        # 1. 프리뷰 텍스트 및 색상 갱신
+        self.lbl_format_preview.configure(text=preview_text, text_color=text_color)
+        
+        # 2. 커스텀 입력창 활성/비활성 제어
+        state = "normal" if is_custom else "disabled"
+        
+        # 비활성화 시 텍스트 색상을 흐리게 처리
+        entry_text_color = ("black", "white") if is_custom else "gray50"
+        
+        self.entry_custom_nl.configure(state=state, text_color=entry_text_color)
+        self.entry_custom_sp.configure(state=state, text_color=entry_text_color)
+
     # --- 4. 고급 설정 ---
     def setup_page_advanced(self, parent):
+
+        # [신규 섹션] 스마트 모드 세부 설정
+        frame_smart = ctk.CTkFrame(parent)
+        frame_smart.pack(fill="x", padx=20, pady=10)
+        ctk.CTkLabel(frame_smart, text="⚡ 스마트 모드 세부 설정", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        
+        smart_grid = ctk.CTkFrame(frame_smart, fg_color="transparent")
+        smart_grid.pack(fill="x", padx=10, pady=5)
+        
+        # 체크박스 3개 배치
+        ctk.CTkCheckBox(smart_grid, text="헤더 보호 (바이너리 깨짐 방지)", variable=self.opt_smart_header).pack(anchor="w", pady=2)
+        ctk.CTkCheckBox(smart_grid, text="JSON 문법 교정 (이스케이프 처리)", variable=self.opt_smart_json).pack(anchor="w", pady=2)
+        ctk.CTkCheckBox(smart_grid, text="특수문자 처리 (엔터/공백 변환)", variable=self.opt_smart_special).pack(anchor="w", pady=2)
+
+        # [신규 섹션] DB 포맷 및 파싱 설정
+        frame_fmt = ctk.CTkFrame(parent)
+        frame_fmt.pack(fill="x", padx=20, pady=10)
+        ctk.CTkLabel(frame_fmt, text="📁 DB 포맷 및 파싱 설정", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        
+        # --- [Row 1] 처리 모드 선택 & 직관적 프리뷰 ---
+        row_mode = ctk.CTkFrame(frame_fmt, fg_color="transparent")
+        row_mode.pack(fill="x", padx=10, pady=5)
+        
+        ctk.CTkLabel(row_mode, text="처리 모드:", width=80, anchor="w").pack(side="left", padx=5)
+        
+        format_options = ["자동감지 (Auto)", "TXT 모드", "JSON 모드", "사용자지정 (Custom)"]
+        self.cbo_format = ctk.CTkOptionMenu(
+            row_mode, variable=self.db_format, values=format_options, width=160,
+            command=self.update_format_preview # 선택 시 프리뷰 갱신
+        )
+        self.cbo_format.pack(side="left", padx=5)
+
+        # [프리뷰 라벨] 줄바꿈/띄어쓰기 변화를 보여주는 텍스트
+        self.lbl_format_preview = ctk.CTkLabel(row_mode, text="", font=("Consolas", 12, "bold"))
+        self.lbl_format_preview.pack(side="left", padx=15)
+
+        # --- [Row 2] 커스텀 입력 필드 (하단 배치 - 들여쓰기 효과) ---
+        self.row_custom = ctk.CTkFrame(frame_fmt, fg_color="transparent")
+        self.row_custom.pack(fill="x", padx=10, pady=(0, 10))
+
+        # '└─' 기호로 하위 메뉴임을 표현
+        icon_label = ctk.CTkLabel(self.row_custom, text="└─ [커스텀 설정]", text_color="gray", width=100, anchor="e")
+        icon_label.pack(side="left", padx=(5, 5))
+        
+        # 줄바꿈 입력
+        ctk.CTkLabel(self.row_custom, text="줄바꿈 치환:").pack(side="left", padx=5)
+        self.entry_custom_nl = ctk.CTkEntry(self.row_custom, textvariable=self.val_newline, width=80, placeholder_text="\\n")
+        self.entry_custom_nl.pack(side="left")
+        
+        # 공백 입력
+        ctk.CTkLabel(self.row_custom, text="공백 치환:").pack(side="left", padx=5)
+        self.entry_custom_sp = ctk.CTkEntry(self.row_custom, textvariable=self.val_space, width=80, placeholder_text="[NBSP]")
+        self.entry_custom_sp.pack(side="left")
+
+        # 초기 실행 시 프리뷰 상태 업데이트 (기본값 반영)
+        self.update_format_preview(self.db_format.get())
+
         # 섹션 1: AI 튜닝
         frame_ai = ctk.CTkFrame(parent)
         frame_ai.pack(fill="x", padx=20, pady=10)
@@ -450,9 +537,21 @@ class TranslatorApp(ctk.CTk):
         ctk.CTkLabel(grid, text="Delay(초):").pack(side="left", padx=5)
         ctk.CTkEntry(grid, textvariable=self.ai_request_delay, width=50).pack(side="left")
         ctk.CTkCheckBox(grid, text="JSON 강제", variable=self.ai_force_json).pack(side="left", padx=15)
+        # 1. 번역 전 적용
+        ctk.CTkCheckBox(grid, text="마스킹 전처리", variable=self.ai_auto_mask).pack(side="left", padx=5)
+        # 2. 번역 후 해제
+        ctk.CTkCheckBox(grid, text="마스킹 후처리", variable=self.ai_auto_restore).pack(side="left", padx=5)
+        prompt_header = ctk.CTkFrame(frame_ai, fg_color="transparent")
+        prompt_header.pack(fill="x", padx=10, pady=(10, 0))
         
-        ctk.CTkLabel(frame_ai, text="System Prompt:", anchor="w").pack(fill="x", padx=10)
-        self.txt_prompt = ctk.CTkTextbox(frame_ai, height=100, font=("Consolas", 11))
+        ctk.CTkLabel(prompt_header, text="System Prompt:", anchor="w", font=("Arial", 12, "bold")).pack(side="left")
+        
+        ctk.CTkButton(prompt_header, text="🔍 크게 보기 / 편집 (Popup)", 
+                      width=120, height=24, 
+                      fg_color="#5D6D7E", 
+                      command=self.open_prompt_editor).pack(side="right")
+
+        self.txt_prompt = ctk.CTkTextbox(frame_ai, height=100, font=("Consolas", 12)) # 기본 크기
         self.txt_prompt.pack(fill="x", padx=10, pady=5)
         self.txt_prompt.insert("1.0", DEFAULT_PROMPT)
         
@@ -478,7 +577,7 @@ class TranslatorApp(ctk.CTk):
         ctk.CTkLabel(frame_tool, text="🛠️ 독립형 용어집 마스킹 (File Utility)", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=10)
         
         desc = "용어집(Glossary)을 사용하여 텍스트 파일 내의 특정 단어를 치환하거나 복원합니다."
-        ctk.CTkLabel(frame_tool, text=desc, text_color="gray", font=("Arial", 11)).pack(anchor="w", padx=10, pady=(0, 5))
+        ctk.CTkLabel(frame_tool, text=desc, text_color="gray", font=("Arial", 12)).pack(anchor="w", padx=10, pady=(0, 5))
 
         # 입력 파일 선택 UI
         tool_row = ctk.CTkFrame(frame_tool, fg_color="transparent")
@@ -514,8 +613,100 @@ class TranslatorApp(ctk.CTk):
             command=self.run_masking_release
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
+        frame_appearance = ctk.CTkFrame(parent)
+        frame_appearance.pack(fill="x", padx=20, pady=10)
+        
+        ctk.CTkLabel(frame_appearance, text="🎨 화면 배율 및 테마 (UI Scaling)", font=("Arial", 14, "bold")).pack(anchor="w", padx=10, pady=5)
+        
+        app_row = ctk.CTkFrame(frame_appearance, fg_color="transparent")
+        app_row.pack(fill="x", padx=10, pady=5)
+
+        # 1. 화면 배율 (Zoom)
+        ctk.CTkLabel(app_row, text="화면 크기(Zoom):").pack(side="left", padx=(5, 0))
+
+        def change_scaling(new_scaling: str):
+            new_scaling_float = int(new_scaling.replace("%", "")) / 100
+            ctk.set_widget_scaling(new_scaling_float)
+            # 윈도우 크기도 배율에 맞춰 살짝 조절 (선택사항)
+            # ctk.set_window_scaling(new_scaling_float)
+
+        scaling_option = ctk.CTkOptionMenu(app_row, values=["80%", "90%", "100%", "110%", "120%", "150%"],
+                                           command=change_scaling)
+        scaling_option.pack(side="left", padx=10)
+        scaling_option.set("100%") # 기본값
+
         # 초기화 버튼
         ctk.CTkButton(parent, text="🔄 공장 초기화 (설정 리셋)", fg_color="#C0392B", command=self.reset_to_defaults).pack(pady=20)
+
+    def open_prompt_editor(self):
+        # 1. 새 창 생성 (Toplevel)
+        editor = ctk.CTkToplevel(self)
+        editor.title("System Prompt Editor")
+        editor.geometry("900x700")
+        
+        # 모달 창 설정 (이 창이 닫힐 때까지 뒤쪽 클릭 방지 - 선택사항)
+        editor.grab_set() 
+        editor.focus_force()
+
+        # 2. 상단 툴바 (폰트 조절 슬라이더 및 저장 버튼)
+        toolbar = ctk.CTkFrame(editor, height=50)
+        toolbar.pack(fill="x", padx=10, pady=10)
+
+        ctk.CTkLabel(toolbar, text="글자 크기:", font=("Arial", 12)).pack(side="left", padx=(10, 5))
+        
+        # 폰트 크기 변수
+        font_size_var = ctk.IntVar(value=14)
+
+        # [슬라이더] 수동 조절 기능
+        slider = ctk.CTkSlider(toolbar, from_=10, to=40, variable=font_size_var, width=200)
+        slider.pack(side="left", padx=10)
+        
+        lbl_size_num = ctk.CTkLabel(toolbar, text="14px", width=40)
+        lbl_size_num.pack(side="left")
+
+        # 저장 및 닫기 버튼
+        def save_and_close():
+            # 팝업의 내용을 메인 화면으로 복사
+            content = txt_editor.get("1.0", "end-1c")
+            self.txt_prompt.delete("1.0", "end")
+            self.txt_prompt.insert("1.0", content)
+            editor.destroy()
+
+        ctk.CTkButton(toolbar, text="💾 적용 및 닫기", fg_color="#27AE60", 
+                      command=save_and_close).pack(side="right", padx=10)
+
+        # 3. 메인 텍스트 에디터
+        txt_editor = ctk.CTkTextbox(editor, font=("Consolas", 14), wrap="word")
+        txt_editor.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        
+        # 메인 화면의 내용을 가져옴
+        current_text = self.txt_prompt.get("1.0", "end-1c")
+        txt_editor.insert("1.0", current_text)
+
+        # 4. 기능 구현 함수들
+        def update_font(val=None):
+            # 슬라이더 값에 따라 폰트 변경
+            size = int(font_size_var.get())
+            txt_editor.configure(font=("Consolas", size))
+            lbl_size_num.configure(text=f"{size}px")
+
+        def mouse_wheel_zoom(event):
+            # Ctrl 키를 누른 상태에서 휠을 굴렸을 때
+            current = font_size_var.get()
+            if event.delta > 0: # 휠 올림
+                new_size = min(current + 2, 40)
+            else: # 휠 내림
+                new_size = max(current - 2, 10)
+            
+            font_size_var.set(new_size)
+            update_font()
+
+        # 5. 이벤트 바인딩
+        slider.configure(command=update_font) # 슬라이더 움직임 감지
+        
+        # 텍스트 박스에 Ctrl + 마우스휠 바인딩
+        # (Windows: <Control-MouseWheel>, Linux: <Control-Button-4/5> 등 차이가 있으나 Windows 기준 작성)
+        txt_editor.bind("<Control-MouseWheel>", mouse_wheel_zoom)
 
         # --- 5. 도움말 탭 ---
     def setup_page_help(self, parent):
@@ -534,12 +725,21 @@ class TranslatorApp(ctk.CTk):
 - 결과: 번역용 통합 파일 생성 (형식: 원문=)
 
 [STEP 2] AI 초벌 번역
-- JSON 경유, 마스킹 기능을 통해 게임 태그 및 고유명사 보호 가능
+- 마스킹 기능을 통해 게임 태그 및 고유명사 보호 가능
+- 마스킹 및 JSON 출력 후 후처리 기능으로 안전필터 완화
 - 결과: 번역 완료 파일 생성 (형식: 원문=번역문)
+- 마스킹 전처리 적용 시 형식: 원문=번역문+마스킹
+- 마스킹 전처리+후처리 적용 시 형식: 원문=번역문+마스킹해제(용어집 뜻으로 복원)
 
 [STEP 3] 적용 파일 생성
 - 번역된 내용을 원본 에셋 형식에 맞춰 재구성
 - 생성된 파일을 UABEA 등을 이용해 게임에 다시 삽입하십시오.
+- 스마트 모드는 번역된 내용을 게임 데이터에 적용할 때, 파일 형식에 맞춰 포맷팅을 교정해주는 기능
+  1. 텍스트파일 바이너리 헤더 보호
+  2. JSON 문법 자동 교정: 줄바꿈(\n)이나 따옴표(")가 문법에 맞게 이스케이프(\\n, \") 처리되도록 변환
+  3. 특수문자 처리: 엔터키(줄바꿈)나 공백 문자를 게임 엔진이 인식할 수 있는 코드로 자동 변환
+- 스마트 저장은 번역된 내용이 있는 파일만 저장하는 기능
+  1. 번역 DB(번역문)와 매칭되는 문장이 하나도 없는 파일은 저장하지 않음
 
 [문제 해결]
 - AI 번역이 멈춘 경우: API 사용량 한도를 확인하거나 '고급 설정'의 Delay를 늘려보세요.
@@ -639,7 +839,7 @@ class TranslatorApp(ctk.CTk):
         row_progress = ctk.CTkFrame(self.log_frame, fg_color="transparent", height=20)
         row_progress.pack(fill="x", padx=10, pady=(10, 5))
         
-        self.lbl_percent = ctk.CTkLabel(row_progress, text="0%", width=50, font=("Arial", 12, "bold"))
+        self.lbl_percent = ctk.CTkLabel(row_progress, text="0%", width=50, font=("Arial", 13, "bold"))
         self.lbl_percent.pack(side="right")
         
         self.progress_bar = ctk.CTkProgressBar(row_progress, height=10)
@@ -647,11 +847,11 @@ class TranslatorApp(ctk.CTk):
         self.progress_bar.set(0)
 
         # [ROW 2] 현재 파일 상태 (프로그레스바 바로 밑에 배치)
-        self.lbl_status = ctk.CTkLabel(self.log_frame, text="Ready", anchor="w", font=("Arial", 11), text_color="gray70")
+        self.lbl_status = ctk.CTkLabel(self.log_frame, text="Ready", anchor="w", font=("Arial", 12), text_color="gray70")
         self.lbl_status.pack(fill="x", padx=10, pady=(0, 5))
 
         # [ROW 3] 상세 로그 박스
-        self.log_box = ctk.CTkTextbox(self.log_frame, height=210, font=("Consolas", 10))
+        self.log_box = ctk.CTkTextbox(self.log_frame, height=210, font=("Consolas", 12))
         self.log_box.pack(fill="both", expand=True, padx=5, pady=(0, 5))
         self.log_box.configure(state="disabled")
 
@@ -683,7 +883,7 @@ class TranslatorApp(ctk.CTk):
         ctk.CTkButton(entry_row, text="↗", width=40, fg_color="#555", command=open_explorer).pack(side="left")
         
         if desc:
-            ctk.CTkLabel(right_col, text=desc, text_color="gray", font=("Arial", 10)).pack(anchor="w", padx=2)
+            ctk.CTkLabel(right_col, text=desc, text_color="gray", font=("Arial", 12)).pack(anchor="w", padx=2)
 
     def log(self, msg):
         def _log():
@@ -762,7 +962,8 @@ class TranslatorApp(ctk.CTk):
             'provider': self.ai_provider.get(), 'api_key': self.ai_api_key.get(), 'model': self.ai_model.get(),
             'glossary_path': self.path_glossary.get(), 'system_prompt': custom_prompt,
             'chunk_size': self.ai_chunk_size.get(), 'temperature': self.ai_temperature.get(),
-            'force_json': self.ai_force_json.get(), 'request_delay': self.ai_request_delay.get()
+            'force_json': self.ai_force_json.get(), 'request_delay': self.ai_request_delay.get(),
+            'auto_restore': self.ai_auto_restore.get(), 'auto_mask': self.ai_auto_mask.get()
         }
         self.wrap_thread(logic_ai.process_ai_translation, target_input, out_target, options, self.log, self.update_progress)
 
@@ -771,8 +972,16 @@ class TranslatorApp(ctk.CTk):
         if not target_out_dir: return
         
         self.update_progress(0, "게임 적용 준비 중...")
+        
         options = {
-            'smart_mode': self.opt_smart_mode.get(), 'smart_save': self.opt_smart_save.get(),
+            'smart_mode': self.opt_smart_mode.get(), # 마스터 스위치
+            'smart_save': self.opt_smart_save.get(),
+            
+            # [신규] 세부 옵션 전달
+            'smart_header': self.opt_smart_header.get(),
+            'smart_json': self.opt_smart_json.get(),
+            'smart_special': self.opt_smart_special.get(),
+            
             'newline_key': self.key_newline.get(), 'space_key': self.key_space.get(),
             'tag_pattern': self.tag_custom_pattern.get(), 'db_format': self.db_format.get(),
             'newline_val': self.val_newline.get(), 'space_val': self.val_space.get()
@@ -780,7 +989,28 @@ class TranslatorApp(ctk.CTk):
         self.wrap_thread(logic.process_translate, self.path_src.get(), target_out_dir, self.path_db.get(), options, self.log, self.update_progress)
 
     def run_cost_estimation(self):
-        self.wrap_thread(logic_ai.process_cost_estimation, self.path_src.get(), self.ai_provider.get(), self.ai_model.get(), self.log)
+        # [수정] self.path_ai_input(선택된 대상)을 가져옴
+        target_path = self.path_ai_input.get().strip()
+        
+        if not target_path:
+            self.log("!! [오류] 비용 산출 대상을 찾을 수 없습니다.")
+            self.log(">> 위의 '계산 대상' 칸에서 파일이나 폴더를 선택해주세요.")
+            return
+            
+        if not os.path.exists(target_path):
+            self.log(f"!! [오류] 경로가 존재하지 않습니다: {target_path}")
+            return
+        
+        self.log(f">> 비용 산출 시작: {os.path.basename(target_path)}")
+        
+        # [수정] logic_ai에 넘기는 첫 번째 인자를 src_dir가 아닌 target_path로 변경
+        self.wrap_thread(
+            logic_ai.process_cost_estimation, 
+            target_path, 
+            self.ai_provider.get(), 
+            self.ai_model.get(), 
+            self.log
+        )
 
     def update_price_data(self):
         def _update():
