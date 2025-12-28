@@ -274,21 +274,32 @@ def _worker_translate(args):
             original_val = db[m.group(0)]
             val = original_val
             
+            # (A) 사용자 지정 모드 (Custom)
             if mode_custom:
                 target_nl = options.get('newline_val', '\n')
                 target_sp = options.get('space_val', ' ')
                 real_nl = '\n' if target_nl == "[Enter]" else target_nl
                 real_sp = '\u00A0' if target_sp == "[NBSP]" else target_sp
                 val = val.replace(nl_key, real_nl).replace(sp_key, real_sp)
+                
+            # (B) 스마트/일반 모드 (TXT or JSON)
             else:
                 if use_special:
-                    val = val.replace(nl_key, '\n').replace(sp_key, '\u00A0')
+                    # [수정된 로직]
+                    # JSON 모드: 일반 공백(' ') 사용
+                    # TXT 모드: 특수 공백(NBSP, '\u00A0') 사용
+                    target_sp = ' ' if mode_json else '\u00A0'
+                    
+                    val = val.replace(nl_key, '\n').replace(sp_key, target_sp)
                 else:
                     val = val.replace(nl_key, '\n')
 
+                # JSON 문법 교정 (문자열 이스케이프 처리)
+                # for_json_parser=True일 땐(재귀 함수 내부) 이미 파이썬 객체이므로 이스케이프 불필요
                 if mode_json and use_json_fix and not for_json_parser:
                     val = val.replace('\n', '\\n').replace('"', '\\"')
-                    val = val.replace('\u00A0', ' ')
+                    # val = val.replace('\u00A0', ' ') # 위에서 원천 차단했으므로 삭제
+
             return val
 
         # ---------------------------------------------------------
