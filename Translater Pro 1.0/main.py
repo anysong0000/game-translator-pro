@@ -27,7 +27,7 @@ import utils
 # ==========================================
 # 설정 및 상수
 # ==========================================
-WINDOW_TITLE = "Game Translator Pro v1.0"
+WINDOW_TITLE = "Game Translator Pro v1.10"
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
@@ -50,7 +50,7 @@ class TranslatorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(WINDOW_TITLE)
-        self.geometry("900x800")
+        self.geometry("1050x800")
 
         try:
             self.iconbitmap(os.path.join(BASE_DIR, "translator_icon.ico"))
@@ -98,7 +98,7 @@ class TranslatorApp(ctk.CTk):
         self.opt_smart_save = tk.BooleanVar(value=True)
         self.key_newline = tk.StringVar(value="\\n")
         self.key_space = tk.StringVar(value=" ")
-        self.val_newline = tk.StringVar(value="[실제 줄바꿈]")
+        self.val_newline = tk.StringVar(value="[ENTER]")
         self.val_space = tk.StringVar(value="[NBSP]")
         
         self.tag_preset = tk.StringVar(value="Unity (<...>)")
@@ -116,8 +116,9 @@ class TranslatorApp(ctk.CTk):
         self.ai_auto_restore = tk.BooleanVar(value=True)
 
         self.opt_smart_header = tk.BooleanVar(value=True)  # 헤더 보호
-        self.opt_smart_json = tk.BooleanVar(value=True)    # JSON 문법 교정
+#        self.opt_smart_json = tk.BooleanVar(value=True)    # JSON 문법 교정
         self.opt_smart_special = tk.BooleanVar(value=True) # 특수문자 처리
+        self.opt_safe_english = tk.BooleanVar(value=False)
 
     # ================================================================
     # [UI Part 1] 사이드바 (Navigation)
@@ -477,8 +478,10 @@ class TranslatorApp(ctk.CTk):
         
         # 체크박스 3개 배치
         ctk.CTkCheckBox(smart_grid, text="헤더 보호 (바이너리 깨짐 방지)", variable=self.opt_smart_header).pack(anchor="w", pady=2)
-        ctk.CTkCheckBox(smart_grid, text="JSON 문법 교정 (이스케이프 처리)", variable=self.opt_smart_json).pack(anchor="w", pady=2)
         ctk.CTkCheckBox(smart_grid, text="특수문자 처리 (엔터/공백 변환)", variable=self.opt_smart_special).pack(anchor="w", pady=2)
+        safe_chk = ctk.CTkCheckBox(smart_grid, text="순수 영문 보호 모드 (변수 오역 방지 / 속도 느림)", 
+                                   variable=self.opt_safe_english, text_color="#E74C3C") # 붉은색 강조
+        safe_chk.pack(anchor="w", pady=2)
 
         # [신규 섹션] DB 포맷 및 파싱 설정
         frame_fmt = ctk.CTkFrame(parent)
@@ -491,7 +494,7 @@ class TranslatorApp(ctk.CTk):
         
         ctk.CTkLabel(row_mode, text="처리 모드:", width=80, anchor="w").pack(side="left", padx=5)
         
-        format_options = ["자동감지 (Auto)", "TXT 모드", "JSON 모드", "사용자지정 (Custom)"]
+        format_options = ["자동감지 (Auto)", "사용자지정 (Custom)"]
         self.cbo_format = ctk.CTkOptionMenu(
             row_mode, variable=self.db_format, values=format_options, width=160,
             command=self.update_format_preview # 선택 시 프리뷰 갱신
@@ -736,13 +739,15 @@ class TranslatorApp(ctk.CTk):
 - 생성된 파일을 UABEA 등을 이용해 게임에 다시 삽입하십시오.
 - 스마트 모드는 번역된 내용을 게임 데이터에 적용할 때, 파일 형식에 맞춰 포맷팅을 교정해주는 기능
   1. 텍스트파일 바이너리 헤더 보호
-  2. JSON 문법 자동 교정: 줄바꿈(\n)이나 따옴표(")가 문법에 맞게 이스케이프(\\n, \") 처리되도록 변환
-  3. 특수문자 처리: 엔터키(줄바꿈)나 공백 문자를 게임 엔진이 인식할 수 있는 코드로 자동 변환
+  2. 특수문자 처리: 엔터키(줄바꿈)나 공백 문자를 게임 엔진이 인식할 수 있는 코드로 자동 변환
 - 스마트 저장은 번역된 내용이 있는 파일만 저장하는 기능
   1. 번역 DB(번역문)와 매칭되는 문장이 하나도 없는 파일은 저장하지 않음
+- UI 등에 있는 짧은영어도 번역하고 싶을때 고급설정 내 영문 보호모드 체크
 
 [문제 해결]
 - AI 번역이 멈춘 경우: API 사용량 한도를 확인하거나 '고급 설정'의 Delay를 늘려보세요.
+- 영문 보호모드는 연산량이 매우많아 응답없음이 뜹니다. 켜두고 몇분 딴짓하시면 됩니다.
+- 영문 보호모드는 일본어, 일본어+영어 유형만 있을 땐 꺼두시는걸 추천드립니다.
 """
         help_textbox.insert("1.0", guide_text)
         help_textbox.configure(state="disabled")
@@ -760,7 +765,7 @@ class TranslatorApp(ctk.CTk):
         info_frame.pack(fill="x", pady=20)
         
         ctk.CTkLabel(info_frame, text="Game Translator Pro", font=("Arial", 30, "bold")).pack()
-        ctk.CTkLabel(info_frame, text="Version: 1.0", text_color="gray").pack()
+        ctk.CTkLabel(info_frame, text="Version: 1.10", text_color="gray").pack()
         ctk.CTkLabel(info_frame, text="Developed by anysong", font=("Arial", 12)).pack(pady=10)
         
         # 1. 후원 프레임 테두리
@@ -979,8 +984,9 @@ class TranslatorApp(ctk.CTk):
             
             # [신규] 세부 옵션 전달
             'smart_header': self.opt_smart_header.get(),
-            'smart_json': self.opt_smart_json.get(),
+#            'smart_json': self.opt_smart_json.get(),
             'smart_special': self.opt_smart_special.get(),
+            'safe_english': self.opt_safe_english.get(),
             
             'newline_key': self.key_newline.get(), 'space_key': self.key_space.get(),
             'tag_pattern': self.tag_custom_pattern.get(), 'db_format': self.db_format.get(),
