@@ -3,6 +3,7 @@ import re
 import json  
 import utils 
 import concurrent.futures 
+import time
 
 # ==========================================
 # 상수 및 정규식 정의 (공통 사용)
@@ -223,191 +224,102 @@ def _recursive_json_replace(data, pattern, repl_func, change_counter):
     else:
         return data
 
+
 # ==========================================
-# [Worker] 개별 파일 번역 작업
+# [Helper] 리스트를 청크로 나누는 함수
 # ==========================================
-def _worker_translate(args):
-    path, out_dir, db, options, pattern = args
-    fname = os.path.basename(path)
+def chunk_list(lst, n):
+    """리스트를 n개씩 자릅니다."""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+
+# ==========================================
+# [Worker] 파일 묶음(Batch) 처리 작업
+# ==========================================
+def _worker_translate_batch(args):
+    file_list, src_dir, out_dir, db, options, pattern = args
     
-    # 1. 포맷 모드 및 옵션 설정
-    fmt_option = options.get('db_format', '자동감지 (Auto)')
+    processed_cnt = 0
+    saved_cnt = 0
+    last_error = None
     
-    mode_custom = "사용자지정" in fmt_option
-    mode_json = "JSON" in fmt_option
-    mode_txt = "TXT" in fmt_option
-    mode_auto = "자동감지" in fmt_option
-    
-    is_json_ext = fname.lower().endswith('.json')
-    if mode_auto:
-        if is_json_ext: mode_json = True
-        else: mode_txt = True
-            
     nl_key = options.get('newline_key', '\\n')
     sp_key = options.get('space_key', ' ')
-    
-    master_smart = options.get('smart_mode', True)
-    use_header = master_smart and options.get('smart_header', True)
-    use_json_fix = master_smart and options.get('smart_json', True)
-    use_special = master_smart and options.get('smart_special', True)
-    
     is_smart_save = options.get('smart_save', True)
     
-    try:
-        # 파일 읽기
-        with open(path, 'rb') as f:
-            raw_bytes = f.read()
+    if not pattern or not db:
+        return 0, 0, "DB Empty"
+
+    for i, fname in enumerate(file_list):
+        # [핵심] 10개 처리할 때마다 0.001초 쉼 -> UI 스레드에 제어권 양보 (응답없음 방지)
+        if i % 10 == 0:
+            time.sleep(0.001)
+
+        path = os.path.join(src_dir, fname)
+        is_json_ext = fname.lower().endswith('.json')
+        processed_cnt += 1
         
         try:
-            text = raw_bytes.decode('utf-8')
-        except UnicodeDecodeError:
-            enc = utils.detect_encoding(path)
-            text = raw_bytes.decode(enc, errors='replace')
-
-        changed_count = 0
-        final_text = text
-
-        # ---------------------------------------------------------
-        # [내부 함수] 치환 로직
-        # ---------------------------------------------------------
-        def replace_cb(m, for_json_parser=False):
-            original_val = db[m.group(0)]
-            val = original_val
+            with open(path, 'rb') as f:
+                raw_bytes = f.read()
             
-            # (A) 사용자 지정 모드 (Custom)
-            if mode_custom:
-                target_nl = options.get('newline_val', '\n')
-                target_sp = options.get('space_val', ' ')
-                real_nl = '\n' if target_nl == "[Enter]" else target_nl
-                real_sp = '\u00A0' if target_sp == "[NBSP]" else target_sp
-                val = val.replace(nl_key, real_nl).replace(sp_key, real_sp)
-                
-            # (B) 스마트/일반 모드 (TXT or JSON)
-            else:
-                if use_special:
-                    # [수정된 로직]
-                    # JSON 모드: 일반 공백(' ') 사용
-                    # TXT 모드: 특수 공백(NBSP, '\u00A0') 사용
-                    target_sp = ' ' if mode_json else '\u00A0'
-                    
-                    val = val.replace(nl_key, '\n').replace(sp_key, target_sp)
-                else:
-                    val = val.replace(nl_key, '\n')
-
-                # JSON 문법 교정 (문자열 이스케이프 처리)
-                # for_json_parser=True일 땐(재귀 함수 내부) 이미 파이썬 객체이므로 이스케이프 불필요
-                if mode_json and use_json_fix and not for_json_parser:
-                    val = val.replace('\n', '\\n').replace('"', '\\"')
-                    # val = val.replace('\u00A0', ' ') # 위에서 원천 차단했으므로 삭제
-
-            return val
-
-        # ---------------------------------------------------------
-        # [내부 함수] 혼합 문장 감지 (Mixed Language Check)
-        # ---------------------------------------------------------
-        def is_mixed_text(t):
-            has_kr = bool(utils.KOREAN_REGEX.search(t))
-            has_jp = bool(utils.JAPANESE_REGEX_WIDE.search(t))
-            return has_kr and has_jp
-
-        # =========================================================
-        # [처리 로직]
-        # =========================================================
-        processed_as_json = False
-        
-        # --- CASE 1: JSON 모드 ---
-        if mode_json:
             try:
-                json_data = json.loads(text)
-                change_counter = [0]
-                
-                def recursive_wrapper(data):
-                    if isinstance(data, str):
-                        new_val, cnt = pattern.subn(lambda m: replace_cb(m, for_json_parser=True), data)
-                        if cnt > 0:
-                            # [JSON 검증] 혼합 시 해당 값만 원문 롤백
-                            if is_mixed_text(new_val):
-                                return data 
-                            change_counter[0] += cnt
-                            return new_val
-                        return data
-                    elif isinstance(data, dict):
-                        return {k: recursive_wrapper(v) for k, v in data.items()}
-                    elif isinstance(data, list):
-                        return [recursive_wrapper(item) for item in data]
-                    else:
-                        return data
+                text = raw_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                enc = utils.detect_encoding(path)
+                text = raw_bytes.decode(enc, errors='replace')
 
-                new_json_data = recursive_wrapper(json_data)
-                changed_count = change_counter[0]
-                final_text = json.dumps(new_json_data, ensure_ascii=False, indent=4)
-                processed_as_json = True
-            except json.JSONDecodeError:
-                pass 
-        
-        # --- CASE 2: TXT 모드 (하이브리드 방식) ---
-        if not processed_as_json:
-            # 1단계: 전체 텍스트 대상 글로벌 치환 (멀티라인 매칭 지원을 위해)
-            # 여기서는 카운트를 세지 않고 일단 변환합니다.
-            temp_text, raw_change_count = pattern.subn(lambda m: replace_cb(m, for_json_parser=False), text)
-            
-            if raw_change_count > 0:
-                # 2단계: 줄 단위 검증 및 롤백
-                # 원문과 변환문의 줄 수가 같을 때만 안전하게 검증 가능
-                orig_lines = text.splitlines(keepends=True)
-                new_lines = temp_text.splitlines(keepends=True)
-                
-                if len(orig_lines) == len(new_lines):
-                    final_lines = []
-                    valid_changes = 0
-                    
-                    for o_line, n_line in zip(orig_lines, new_lines):
-                        # 변환이 일어난 줄만 검사
-                        if o_line != n_line:
-                            if is_mixed_text(n_line):
-                                # 실패: 혼합 문장이면 원문 사용
-                                final_lines.append(o_line)
-                            else:
-                                # 성공: 번역문 사용
-                                final_lines.append(n_line)
-                                valid_changes += 1
-                        else:
-                            final_lines.append(n_line)
-                    
-                    final_text = "".join(final_lines)
-                    changed_count = valid_changes
+            # 치환 로직 (구버전 방식)
+            def replace_cb(m):
+                match_str = m.group(0)
+                temp_key = match_str.replace(r'\r\n', '\n').replace(r'\r', '\n').replace(r'\n', '\n')
+                temp_key = temp_key.replace('\r\n', '\n').replace('\r', '\n')
+                parts = [p.strip() for p in temp_key.split('\n')]
+                search_key = "\n".join(parts)
+
+                if search_key not in db: return match_str 
+                val = db[search_key]
+
+                if is_json_ext:
+                    val = val.replace(nl_key, '\\n').replace('"', '\\"').replace(sp_key, ' ')
                 else:
-                    # 줄 수가 달라졌다면(매우 드문 케이스) 검증을 포기하고 변환본 전체 적용
-                    # (멀티라인 치환 등으로 개행 문자가 달라질 수 있음)
-                    final_text = temp_text
-                    changed_count = raw_change_count
+                    val = val.replace(nl_key, '\n').replace(sp_key, '\u00A0')
+                return val
+
+            final_text, changed_count = pattern.subn(replace_cb, text)
+
+            if is_smart_save and changed_count == 0:
+                continue 
+
+            if not os.path.exists(out_dir):
+                os.makedirs(out_dir, exist_ok=True) 
+
+            # ▼▼▼ [수정] 파일 확장자에 따라 인코딩 차별화 ▼▼▼
+            if is_json_ext:
+                # JSON 파일: BOM 없이 순수 UTF-8로 저장 (UABEA 호환성)
+                out_bytes = final_text.encode('utf-8')
             else:
-                final_text = text
-                changed_count = 0
+                # TXT/DAT 파일: 한글 인식을 위해 BOM(서명) 추가
+                out_bytes = final_text.encode('utf-8-sig')
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-        # [저장 로직]
-        if is_smart_save and changed_count == 0:
-            return fname, 0, False, None 
+            # [헤더 보호 로직] (JSON은 텍스트라 헤더 보호가 필요 없으므로 안전함)
+            if len(raw_bytes) >= 4 and len(out_bytes) >= 4:
+                # 단, 원본이 JSON이 아닌 바이너리 파일일 경우에만 작동하도록 조건 추가 권장
+                # (is_json_ext가 False일 때만)
+                if not is_json_ext and (raw_bytes[0] == 0 or raw_bytes[1] == 0): 
+                    temp_arr = bytearray(out_bytes)
+                    temp_arr[:4] = raw_bytes[:4]
+                    out_bytes = bytes(temp_arr)
 
-        if not os.path.exists(out_dir):
-            os.makedirs(out_dir, exist_ok=True) 
+            with open(os.path.join(out_dir, fname), 'wb') as f:
+                f.write(out_bytes)
+            saved_cnt += 1
 
-        out_bytes = final_text.encode('utf-8')
-        
-        # [헤더 보호]
-        if use_header and not processed_as_json and len(raw_bytes) >= 4 and len(out_bytes) >= 4:
-            if raw_bytes[0] == 0 or raw_bytes[1] == 0: 
-                temp_arr = bytearray(out_bytes)
-                temp_arr[:4] = raw_bytes[:4]
-                out_bytes = bytes(temp_arr)
-
-        with open(os.path.join(out_dir, fname), 'wb') as f:
-            f.write(out_bytes)
-            
-        return fname, changed_count, True, None 
-
-    except Exception as e:
-        return fname, 0, False, str(e)
+        except Exception as e:
+            last_error = f"{fname}: {str(e)}"
+    
+    return processed_cnt, saved_cnt, last_error
 
 # ==========================================
 # 2. 번역 적용 로직 (Process Translate)
@@ -417,51 +329,102 @@ def process_translate(src_dir, out_dir, db_path, options, log_callback, progress
         log_callback("!! 경로를 모두 지정해주세요.")
         return
 
-    log_callback("=== 번역 적용 시작 (멀티스레딩) ===")
+    log_callback("=== 번역 적용 시작 (반응형 배치 모드) ===")
 
+    # 1. DB 로드 (기존과 동일)
     db = {}
     try:
         with open(db_path, 'r', encoding='utf-8') as f:
             for line in f:
                 if '=' not in line: continue
                 k, v = line.strip().split('=', 1)
-                db[k.strip()] = v.strip()
+                clean_k = k.strip().replace(r'\r\n', '\n').replace(r'\r', '\n').replace(r'\n', '\n')
+                clean_k = clean_k.replace('\r\n', '\n').replace('\r', '\n')
+                db[clean_k] = v.strip()
         
         keys = sorted(db.keys(), key=len, reverse=True)
         if not keys:
             log_callback("!! DB 파일이 비어있습니다.")
             return
+
+        escaped_keys = []
+        flexible_newline = r'[ \t]*(?:\\r\\n|\\n|\\r|\r\n|\n|\r)[ \t]*'
+        ascii_check = re.compile(r'^[\x00-\x7F]+$')
+
+        # ▼▼▼ [추가] 옵션값 가져오기 ▼▼▼
+        use_safe_mode = options.get('safe_english', False)
+
+        for k in keys:
+            parts = k.split('\n')
+            safe_parts = [re.escape(p) for p in parts]
+            pattern_str = flexible_newline.join(safe_parts)
+            # ▼▼▼ [수정] 옵션이 켜져 있을 때만 "비싼 연산" 수행 ▼▼▼
+            if use_safe_mode and len(parts) == 1 and ascii_check.match(k):
+                # 안전 장치 (따옴표/괄호 보호 + JSON 키 보호) - 연산 비용 높음
+                safe_prefix = r'(?<=[\"\'\>])'
+                safe_suffix = r'(?=[\"\'\<])'
+                json_guard  = r'(?!\s*:)'
+                pattern_str = safe_prefix + pattern_str + safe_suffix + json_guard
+            
+            escaped_keys.append(pattern_str)
         
-        pattern = re.compile('|'.join(re.escape(k) for k in keys))
-        log_callback(f">> DB 로드 완료: {len(db)}개 항목")
+        pattern = re.compile('|'.join(escaped_keys))
+        log_callback(f">> DB 로드 완료: {len(db)}개 항목 (영문보호: {'ON' if use_safe_mode else 'OFF'})")
         
     except Exception as e:
         log_callback(f"!! DB 로드 실패: {e}")
         return
 
+    # 2. 파일 목록 스캔
     files = [f for f in os.listdir(src_dir) if f.lower().endswith(('.txt', '.json', '.dat'))]
     total_files = len(files)
     
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    # ---------------------------------------------------------------
+    # [최적화 1] 배치 크기를 줄여서 로그 갱신 속도를 높임 (5분 대기 해소)
+    # ---------------------------------------------------------------
+    BATCH_SIZE = 50 
+    file_chunks = list(utils.chunk_list(files, BATCH_SIZE)) if hasattr(utils, 'chunk_list') else list(chunk_list(files, BATCH_SIZE))
+    
+    # ---------------------------------------------------------------
+    # [최적화 2] CPU 코어 여유 확보
+    # ---------------------------------------------------------------
+    cpu_count = os.cpu_count() or 4
+    safe_workers = max(1, cpu_count - 1) 
+    
+    log_callback(f">> 총 {total_files}개 파일 번역 시작...")
+
+    total_scanned = 0
+    total_saved = 0
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=safe_workers) as executor:
         futures = []
-        for fname in files:
-            path = os.path.join(src_dir, fname)
-            args = (path, out_dir, db, options, pattern)
-            futures.append(executor.submit(_worker_translate, args))
+        for chunk in file_chunks:
+            args = (chunk, src_dir, out_dir, db, options, pattern)
+            futures.append(executor.submit(_worker_translate_batch, args))
         
         for idx, future in enumerate(concurrent.futures.as_completed(futures)):
-            fname, count, saved, error = future.result()
+            p_cnt, s_cnt, error = future.result()
+            total_scanned += p_cnt
+            total_saved += s_cnt
             
-            if error:
-                log_callback(f"!! {fname} 처리 실패: {error}")
-            elif saved:
-                is_json = fname.lower().endswith('.json')
-                log_callback(f"[{'JSON' if is_json else 'TXT'}] {fname} 처리됨 ({count}개)")
+            if error: log_callback(f"!! 오류: {error}")
+            
+            # 진행률 업데이트
+            if progress_callback:
+                progress = total_scanned / total_files if total_files > 0 else 0
+                progress_callback(progress, f"{total_scanned}/{total_files} 완료 ({int(progress*100)}%)")
+                
+            # [최적화 3] 로그는 배치 5번마다 한 번씩만 출력 (너무 빠르면 읽기 힘듦)
+            if idx % 5 == 0 or idx == len(file_chunks) - 1:
+                 log_callback(f">> 진행 중: {total_scanned}개 완료 (생성: {total_saved}개)")
 
-            if progress_callback and total_files > 0:
-                progress_callback((idx + 1) / total_files, fname)
 
-    log_callback("=== 모든 번역 작업 완료 ===")
+    # [수정] 최종 결과 로그를 명확하게 분리
+    log_callback("========================================")
+    log_callback(f"   [작업 완료]")
+    log_callback(f"   - 전체 스캔 파일: {total_scanned}개")
+    log_callback(f"   - 실제 생성 파일: {total_saved}개 (스마트 저장)")
+    log_callback("========================================")
 
 # ==========================================
 # 3. DB 마스킹 유틸리티 (Process DB Masking)
