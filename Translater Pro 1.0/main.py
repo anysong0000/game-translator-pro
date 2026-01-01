@@ -27,7 +27,7 @@ import utils
 # ==========================================
 # 설정 및 상수
 # ==========================================
-WINDOW_TITLE = "Game Translator Pro v1.10"
+WINDOW_TITLE = "Game Translator Pro v1.11"
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
@@ -757,58 +757,48 @@ class TranslatorApp(ctk.CTk):
         tabview = ctk.CTkTabview(parent)
         tabview.pack(fill="both", expand=True, padx=20, pady=10)
         
-        tab_info = tabview.add("정보 및 후원")
+        tab_info = tabview.add("프로그램 정보") # 탭 이름 변경
         tab_legal = tabview.add("라이선스 및 면책")
         
-        # TAB 1: 정보 및 후원
-        info_frame = ctk.CTkFrame(tab_info, fg_color="transparent")
-        info_frame.pack(fill="x", pady=20)
+        # TAB 1: 정보
+        # 중앙 정렬을 위한 컨테이너
+        center_frame = ctk.CTkFrame(tab_info, fg_color="transparent")
+        center_frame.pack(expand=True, fill="both", padx=20, pady=20)
+        center_frame.grid_rowconfigure(0, weight=1)
+        center_frame.grid_rowconfigure(4, weight=1)
+        center_frame.grid_columnconfigure(0, weight=1)
+
+        # 1. 로고 및 타이틀 영역 (상단 배치)
+        info_frame = ctk.CTkFrame(center_frame, fg_color="transparent")
+        info_frame.grid(row=1, column=0, pady=20)
         
         ctk.CTkLabel(info_frame, text="Game Translator Pro", font=("Arial", 30, "bold")).pack()
-        ctk.CTkLabel(info_frame, text="Version: 1.10", text_color="gray").pack()
-        ctk.CTkLabel(info_frame, text="Developed by anysong", font=("Arial", 12)).pack(pady=10)
+        ctk.CTkLabel(info_frame, text="Version: 1.11", text_color="gray", font=("Arial", 14)).pack(pady=5)
+        ctk.CTkLabel(info_frame, text="Developed by anysong", font=("Arial", 12)).pack(pady=(0, 20))
         
-        # 1. 후원 프레임 테두리
-        sponsor_frame = ctk.CTkFrame(tab_info, border_width=2, border_color=("#0064FF", "#3B8ED0"))
-        sponsor_frame.pack(fill="x", padx=20, pady=10)
-        
-        ctk.CTkLabel(sponsor_frame, text="💙 프로그램 개발 응원하기", 
-                     font=("Arial", 18, "bold"), text_color=("#0064FF", "#3B8ED0")).pack(pady=(20, 10))
-        
-        sponsor_msg = (
-            "후원 시 남겨주신 닉네임과 응원 메시지는 개발자에게 큰 힘이 됩니다!\n"
-            "보내주신 후원금은 사리사욕을 위해 소중히 사용하겠습니다."
-        )
-        ctk.CTkLabel(sponsor_frame, text=sponsor_msg, text_color=("black", "white")).pack(pady=(0, 20))
-        
-        btn_box = ctk.CTkFrame(sponsor_frame, fg_color="transparent")
-        btn_box.pack(pady=(0, 20))
-        
+        # 2. 링크 버튼
         def open_link(url):
             import webbrowser
             webbrowser.open(url)
 
-        # 투네이션 버튼 (닉네임 확인 가능)
-        ctk.CTkButton(btn_box, text="투네이션으로 후원 (닉네임 가능)", 
-                      fg_color="#0064FF", hover_color="#0052D1",
-                      command=lambda: open_link("https://toon.at/donate/anysong0000")).pack(side="left", padx=10)
-        
-        # 깃허브 버튼 (신뢰도용)
-        ctk.CTkButton(btn_box, text="GitHub 프로젝트 방문", fg_color="#24292e", 
-                      command=lambda: open_link("https://github.com/")).pack(side="left", padx=10)
+        btn_github = ctk.CTkButton(info_frame, text="GitHub 프로젝트 방문", 
+                                 fg_color="#24292e", hover_color="#1b1f23",
+                                 width=200, height=40,
+                                 command=lambda: open_link("https://github.com/"))
+        btn_github.pack(pady=10)
 
-        # 2. 하단 안내
-        notice_lbl = ctk.CTkLabel(tab_info, text="* 후원 후 알려주시면 다음 버전 '도움주신 분들'에 기록해 드립니다.", 
-                                  font=("Arial", 11), text_color="gray")
-        notice_lbl.pack(pady=5)
-
-        # 3. 유틸리티
-        util_frame = ctk.CTkFrame(tab_info, fg_color="transparent")
-        util_frame.pack(fill="x", padx=20, pady=20, side="bottom")
+        # 3. 유틸리티 (배포 준비)
+        # 하단에 자연스럽게 위치하도록 설정
+        util_frame = ctk.CTkFrame(center_frame, fg_color="transparent")
+        util_frame.grid(row=3, column=0, pady=40, sticky="s")
         
-        ctk.CTkLabel(util_frame, text="배포 준비:", font=("Arial", 12, "bold")).pack(side="left")
+        # 구분선 느낌의 라벨
+        ctk.CTkLabel(util_frame, text="― 배포 관리 유틸리티 ―", text_color="gray70", font=("Arial", 11)).pack(pady=(0, 10))
+        
         ctk.CTkButton(util_frame, text="📄 README.txt 생성하기", 
-                      command=self.generate_readme_file, fg_color="#34495E", width=150).pack(side="left", padx=10)
+                      command=self.generate_readme_file, 
+                      fg_color="#34495E", hover_color="#2C3E50", 
+                      width=200, height=35).pack()
 
         # TAB 2: 라이선스
         license_text = """
@@ -1123,12 +1113,6 @@ Copyright © 2025 anysong. All rights reserved.
 - 소프트웨어 사용으로 인한 모든 기술적/법적 책임은 사용자 본인에게 있습니다.
 - 게임사 가이드라인 및 이용약관(EULA) 위반 여부를 반드시 확인하십시오.
 - AI 번역 시 발생하는 API 비용은 사용자 부담입니다.
-
-3. 후원 및 문의
------------------------------------------------------------
-개발자의 지속적인 업데이트를 지원하고 싶으시다면 아래 링크를 확인해주세요.
-https://toon.at/donate/anysong0000
-(프로그램 내 '정보' 탭에서 후원 버튼을 클릭할 수 있습니다.)
 ===========================================================
 """
         try:
