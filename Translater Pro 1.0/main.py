@@ -27,7 +27,7 @@ import utils
 # ==========================================
 # 설정 및 상수
 # ==========================================
-WINDOW_TITLE = "Game Translator Pro v1.11"
+WINDOW_TITLE = "Game Translator Pro v1.12"
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
@@ -773,7 +773,7 @@ class TranslatorApp(ctk.CTk):
         info_frame.grid(row=1, column=0, pady=20)
         
         ctk.CTkLabel(info_frame, text="Game Translator Pro", font=("Arial", 30, "bold")).pack()
-        ctk.CTkLabel(info_frame, text="Version: 1.11", text_color="gray", font=("Arial", 14)).pack(pady=5)
+        ctk.CTkLabel(info_frame, text="Version: 1.12", text_color="gray", font=("Arial", 14)).pack(pady=5)
         ctk.CTkLabel(info_frame, text="Developed by anysong", font=("Arial", 12)).pack(pady=(0, 20))
         
         # 2. 링크 버튼
