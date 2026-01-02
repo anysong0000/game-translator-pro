@@ -283,10 +283,11 @@ def _worker_translate_batch(args):
                 if is_json_ext:
                     val = val.replace(nl_key, '\\n').replace('"', '\\"').replace(sp_key, ' ')
                 else:
-                    # [수정됨] TXT/DAT: 
-                    # 1. 띄어쓰기(sp_key) -> 특수공백(\u00A0)
-                    # 2. 줄바꿈(nl_key) -> 띄어쓰기(' ')로 변경 (기존 '\n'에서 변경)
-                    val = val.replace(nl_key, ' ').replace(sp_key, '\u00A0')
+                    # [수정됨] TXT/DAT 파일 처리 순서 변경:
+                    # 1. 기존 공백(sp_key)을 먼저 특수공백(\u00A0)으로 변환
+                    # 2. 그 후 줄바꿈(nl_key)을 일반 공백(' ')으로 변환
+                    # 이렇게 해야 줄바꿈에서 생성된 공백이 다시 특수공백으로 변하는 것을 방지할 수 있습니다.
+                    val = val.replace(sp_key, '\u00A0').replace(nl_key, ' ')
                 return val
 
             final_text, changed_count = pattern.subn(replace_cb, text)
