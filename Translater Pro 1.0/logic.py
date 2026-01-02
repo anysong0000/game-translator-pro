@@ -283,7 +283,10 @@ def _worker_translate_batch(args):
                 if is_json_ext:
                     val = val.replace(nl_key, '\\n').replace('"', '\\"').replace(sp_key, ' ')
                 else:
-                    val = val.replace(nl_key, '\n').replace(sp_key, '\u00A0')
+                    # [수정됨] TXT/DAT: 
+                    # 1. 띄어쓰기(sp_key) -> 특수공백(\u00A0)
+                    # 2. 줄바꿈(nl_key) -> 띄어쓰기(' ')로 변경 (기존 '\n'에서 변경)
+                    val = val.replace(nl_key, ' ').replace(sp_key, '\u00A0')
                 return val
 
             final_text, changed_count = pattern.subn(replace_cb, text)
